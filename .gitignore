@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+mobile/node_modules/
+server/node_modules/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+server/.env
+
+# Databases
+*.sqlite
+*.sqlite-journal
+server/data/
+
+# Expo / Metro
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Logs / OS / IDE
+.DS_Store
+*.log
+.idea/
+.vscode/
+coverage/
+dist/
+out/
+
+# Bun
+server/*.tgz
