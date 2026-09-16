@@ -125,7 +125,6 @@ export type Profile = {
   weightKg: number | null;
   experience: Experience | null;
   goals: Goal[];
-  daysPerWeek: number | null;
   limitations: string;
   updatedAt: string | null;
 };
@@ -137,7 +136,6 @@ export type ProfileInput = {
   weightKg: number | null;
   experience: Experience | null;
   goals: Goal[];
-  daysPerWeek: number | null;
   limitations: string;
 };
 

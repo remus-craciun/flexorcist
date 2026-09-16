@@ -15,6 +15,7 @@ import {
   pendingCreates,
   pendingDeletes,
   pendingUpdates,
+  hasLocalSnapshot,
   pruneMissingServerRows,
   removeLocalRow,
   setServerId,
@@ -53,44 +54,60 @@ export async function pullSnapshot() {
 
   const sessionIds: number[] = [];
 
-  for (const exercise of data.exercises) {
-    await upsertExerciseFromServer(exercise);
+  // The same exercise is attached to many workouts, so the snapshot repeats it
+  // hundreds of times. Upsert each one once and reuse its local id.
+  const exerciseLocalIds = new Map<number, number>();
+  async function localExerciseId(exercise: Exercise) {
+    const cached = exerciseLocalIds.get(exercise.id);
+    if (cached !== undefined) return cached;
+    const localId = await upsertExerciseFromServer(exercise);
+    exerciseLocalIds.set(exercise.id, localId);
     exerciseIds.push(exercise.id);
+    return localId;
   }
 
-  for (const program of data.programs) {
-    const localProgramId = await upsertProgramFromServer(program);
-    programIds.push(program.id);
-    for (const workout of program.workouts) {
-      const localWorkoutId = await upsertWorkoutFromServer(localProgramId, workout);
-      workoutIds.push(workout.id);
-      for (const item of workout.exercises) {
-        const localExerciseId = await upsertExerciseFromServer(item.exercise);
-        exerciseIds.push(item.exercise.id);
-        await upsertWorkoutExerciseFromServer(localWorkoutId, localExerciseId, item);
-        itemIds.push(item.id);
+  const db = await getDb();
+  // One transaction for the whole snapshot. Each upsert is its own implicit
+  // transaction otherwise, which means a commit (and on Android a disk sync)
+  // per row — the dominant cost of a sync by a wide margin.
+  await db.withTransactionAsync(async () => {
+    for (const exercise of data.exercises) {
+      await localExerciseId(exercise);
+    }
+
+    for (const program of data.programs) {
+      const localProgramId = await upsertProgramFromServer(program);
+      programIds.push(program.id);
+      for (const workout of program.workouts) {
+        const localWorkoutId = await upsertWorkoutFromServer(localProgramId, workout);
+        workoutIds.push(workout.id);
+        for (const item of workout.exercises) {
+          const itemExerciseId = await localExerciseId(item.exercise);
+          await upsertWorkoutExerciseFromServer(localWorkoutId, itemExerciseId, item);
+          itemIds.push(item.id);
+        }
       }
     }
-  }
 
-  for (const session of data.sessions ?? []) {
-    const localWorkout = session.workoutId
-      ? await getByServerId<WorkoutRow>("workouts", session.workoutId)
-      : null;
-    const localProgram = session.programId
-      ? await getByServerId<ProgramRow>("programs", session.programId)
-      : null;
-    await upsertSessionFromServer(session, localWorkout?.id ?? null, localProgram?.id ?? null);
-    sessionIds.push(session.id);
-  }
+    for (const session of data.sessions ?? []) {
+      const localWorkout = session.workoutId
+        ? await getByServerId<WorkoutRow>("workouts", session.workoutId)
+        : null;
+      const localProgram = session.programId
+        ? await getByServerId<ProgramRow>("programs", session.programId)
+        : null;
+      await upsertSessionFromServer(session, localWorkout?.id ?? null, localProgram?.id ?? null);
+      sessionIds.push(session.id);
+    }
 
-  if (data.sessions) {
-    await pruneMissingServerRows("sessions", [...new Set(sessionIds)]);
-  }
-  await pruneMissingServerRows("workout_exercises", [...new Set(itemIds)]);
-  await pruneMissingServerRows("workouts", [...new Set(workoutIds)]);
-  await pruneMissingServerRows("programs", [...new Set(programIds)]);
-  await pruneMissingServerRows("exercises", [...new Set(exerciseIds)]);
+    if (data.sessions) {
+      await pruneMissingServerRows("sessions", [...new Set(sessionIds)]);
+    }
+    await pruneMissingServerRows("workout_exercises", [...new Set(itemIds)]);
+    await pruneMissingServerRows("workouts", [...new Set(workoutIds)]);
+    await pruneMissingServerRows("programs", [...new Set(programIds)]);
+    await pruneMissingServerRows("exercises", [...new Set(exerciseIds)]);
+  });
 }
 
 export async function pushPending() {
@@ -310,6 +327,13 @@ export async function refreshLocal() {
 
 export async function ensureHydrated() {
   if (settled) return;
+  // `settled` resets on every app start, so blocking here made each launch wait
+  // for a full snapshot. Once this device has data, refresh in the background
+  // and let the caller render what it already has.
+  if (await hasLocalSnapshot()) {
+    void syncNow();
+    return;
+  }
   await syncNow();
 }
 

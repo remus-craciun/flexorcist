@@ -6,6 +6,7 @@ import {
   getApiUrl,
   getToken,
   getUserEmail,
+  normalizeApiUrl,
   setApiUrl as persistApiUrl,
   setToken as persistToken,
   setUserEmail as persistUserEmail,
@@ -97,12 +98,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setServerUrl = useCallback(async (url: string) => {
     setError(null);
-    const normalized = await persistApiUrl(url);
-    setApiUrlState(normalized);
+    const normalized = normalizeApiUrl(url);
+    // Probe before persisting: a URL that never answered must not survive a restart and
+    // send the app past the setup screen to a login it can never complete.
     const status = await apiRequest<AuthStatus>("/auth/status", {
       auth: false,
       apiUrl: normalized,
     });
+    await persistApiUrl(normalized);
+    setApiUrlState(normalized);
     setHasUser(status.hasUser);
   }, []);
 

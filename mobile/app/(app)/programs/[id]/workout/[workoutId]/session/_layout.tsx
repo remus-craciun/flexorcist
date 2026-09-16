@@ -1,3 +1,4 @@
+import { useKeepAwake } from "expo-keep-awake";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
@@ -10,6 +11,10 @@ import { WorkoutSessionProvider } from "@/lib/workout-session";
 import { fonts, useTheme } from "@/theme";
 
 export default function SessionLayout() {
+  // Hands are busy mid-set: hold the screen on for the whole session (exercise,
+  // rest and the completion screen). Released automatically on unmount.
+  useKeepAwake();
+
   const theme = useTheme();
   const { id, workoutId: workoutIdParam } = useLocalSearchParams<{
     id: string;

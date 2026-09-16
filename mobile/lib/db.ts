@@ -2,6 +2,12 @@ import * as SQLite from "expo-sqlite";
 
 const SCHEMA = `
 PRAGMA foreign_keys = ON;
+-- WAL keeps readers off the writer's back and skips the rollback-journal
+-- fsync per statement; NORMAL syncs at checkpoints instead of every commit.
+-- Sync writes hundreds of rows at a time, so this is the difference between
+-- a visible stall and an unnoticeable one.
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 
 CREATE TABLE IF NOT EXISTS exercises (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

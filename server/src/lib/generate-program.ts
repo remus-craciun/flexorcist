@@ -8,6 +8,26 @@ import { log } from "./log";
 
 const LOCATIONS = ["home", "park", "gym"] as const;
 
+const WEEKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+] as const;
+
+/**
+ * The weekdays to train on, as sorted unique dayIndex values (1=Monday … 7=Sunday).
+ * The generate screen owns this choice and always sends it; the fallback only
+ * covers older clients, so generation never hard-fails on a missing field.
+ */
+function resolveTrainingDays(requested: number[] | undefined): number[] {
+  const source = requested?.length ? requested : [1, 3, 5];
+  return [...new Set(source)].filter((day) => day >= 1 && day <= 7).sort((a, b) => a - b);
+}
+
 const generatedExerciseSchema = z.object({
   name: z.string().min(1).max(200),
   muscles: z.array(z.string().min(1).max(40)).max(8).default([]),
@@ -48,6 +68,8 @@ export type VolumeBand = keyof typeof VOLUME_BANDS;
 
 export const generateRequestSchema = z.object({
   weeks: z.number().int().min(1).max(4).optional(),
+  /** Weekdays to train on, as dayIndex values: 1=Monday … 7=Sunday. */
+  days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
   volume: z.enum(["low", "medium", "high", "extra_high"]).optional(),
   focus: z.string().max(500).optional(),
 });
@@ -133,7 +155,6 @@ function profileSnapshot(row: typeof profiles.$inferSelect | undefined) {
     weightKg: row?.weightKg ?? null,
     experience: row?.experience ?? null,
     goals: row?.goals ?? [],
-    daysPerWeek: row?.daysPerWeek ?? null,
     limitations: row?.limitations ?? "",
   };
 }
@@ -155,15 +176,13 @@ function buildPrompt(
   options: GenerateRequest,
 ) {
   const weeks = options.weeks ?? 4;
-  const daysPerWeek = profile.daysPerWeek ?? 3;
+  const days = resolveTrainingDays(options.days);
   const volumeKey = options.volume ?? "medium";
   const volume = VOLUME_BANDS[volumeKey];
   const goals =
     profile.goals.length > 0 ? profile.goals.join(", ").replaceAll("_", " ") : "general fitness";
   const focus = options.focus?.trim();
-  const weekdaySpan = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    .slice(0, daysPerWeek)
-    .join(", ");
+  const weekdaySpan = days.map((day) => `${WEEKDAYS[day - 1]} (dayIndex ${day})`).join(", ");
 
   return `You are Flexorcist's coach. Write a ${weeks}-week program this athlete can run as-is.
 
@@ -179,8 +198,9 @@ Use every known field. Do not invent injuries or history. Never prescribe a move
 ${focus ? `Athlete request (honor this unless it conflicts with limitations): ${focus}` : ""}
 
 CALENDAR
-- ${weeks} week(s), ${daysPerWeek} training day(s) per week: ${weekdaySpan}.
-- dayIndex is the weekday number: 1=Monday … 7=Sunday. Use dayIndex 1 through ${daysPerWeek} every week.
+- ${weeks} week(s), ${days.length} training day(s) per week: ${weekdaySpan}.
+- dayIndex is the weekday number: 1=Monday … 7=Sunday. Use exactly these dayIndex values every week: ${days.join(", ")}. Never emit a workout on any other day.
+- The athlete rests on the other days. Account for how the training days are spaced — back-to-back days should not hammer the same muscles, and a long gap is a chance for a harder session.
 - Each of those days has exactly three workouts: location "home", "park", and "gym".
 - label is the session name only (Push, Pull, Legs, Upper, Lower, Full body). Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label.
 
@@ -210,16 +230,42 @@ Reuse these names exactly when the movement already exists. Invent a new name on
 ${catalog.length === 0 ? "(empty — invent appropriate exercises)" : catalog.map(formatCatalogLine).join("\n")}`;
 }
 
-function completeDays(draft: GeneratedProgram, weeks: number, daysPerWeek: number): GeneratedProgram {
+/**
+ * Models reliably produce the right *number* of training days but sometimes
+ * number them 1..N instead of on the weekdays we asked for. When the shape
+ * matches, slide the draft onto the requested weekdays rather than failing the
+ * whole generation — the split order is what matters, and it is preserved.
+ */
+function remapToRequestedDays(draft: GeneratedProgram, days: number[]): GeneratedProgram {
+  const present = [...new Set(draft.workouts.map((workout) => workout.dayIndex))].sort(
+    (a, b) => a - b,
+  );
+  const wanted = [...days].sort((a, b) => a - b);
+  if (present.length !== wanted.length) return draft;
+  if (present.every((day, index) => day === wanted[index])) return draft;
+
+  const remap = new Map(present.map((day, index) => [day, wanted[index]]));
+  log.info("program.generate.remapped_days", { from: present, to: wanted });
+  return {
+    ...draft,
+    workouts: draft.workouts.map((workout) => ({
+      ...workout,
+      dayIndex: remap.get(workout.dayIndex) ?? workout.dayIndex,
+    })),
+  };
+}
+
+function completeDays(draft: GeneratedProgram, weeks: number, days: number[]): GeneratedProgram {
+  const wanted = new Set(days);
   const bySlot = new Map<string, GeneratedProgram["workouts"][number]>();
   for (const workout of draft.workouts) {
-    if (workout.week > weeks || workout.dayIndex > daysPerWeek) continue;
+    if (workout.week > weeks || !wanted.has(workout.dayIndex)) continue;
     bySlot.set(`${workout.week}-${workout.dayIndex}-${workout.location}`, workout);
   }
 
   const workouts: GeneratedProgram["workouts"] = [];
   for (let week = 1; week <= weeks; week++) {
-    for (let dayIndex = 1; dayIndex <= daysPerWeek; dayIndex++) {
+    for (const dayIndex of days) {
       const label =
         bySlot.get(`${week}-${dayIndex}-home`)?.label ??
         bySlot.get(`${week}-${dayIndex}-park`)?.label ??
@@ -314,9 +360,9 @@ export async function generateAndPersistProgram(
   const profile = profileSnapshot(profileRow);
   const catalog = db.select().from(exercises).all();
   const weeks = options.weeks ?? 4;
-  const daysPerWeek = profile.daysPerWeek ?? 3;
+  const days = resolveTrainingDays(options.days);
   const volume = options.volume ?? "medium";
-  const prompt = buildPrompt(profile, catalog, { ...options, weeks, volume });
+  const prompt = buildPrompt(profile, catalog, { ...options, weeks, days, volume });
 
   let draft: GeneratedProgram;
   try {
@@ -333,7 +379,7 @@ export async function generateAndPersistProgram(
     );
   }
 
-  const programDraft = completeDays({ ...draft, weeks }, weeks, daysPerWeek);
+  const programDraft = completeDays(remapToRequestedDays({ ...draft, weeks }, days), weeks, days);
   const createdExerciseIds: number[] = [];
 
   const programId = db.transaction((tx) => {

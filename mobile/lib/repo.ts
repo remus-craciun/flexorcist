@@ -128,14 +128,21 @@ export async function deleteProgram(id: number) {
 }
 
 export async function generateProgram(
-  input: { weeks?: number; volume?: "low" | "medium" | "high" | "extra_high"; focus?: string } = {},
+  input: {
+    weeks?: number;
+    /** Weekdays to train on, as dayIndex values: 1=Monday … 7=Sunday. */
+    days?: number[];
+    volume?: "low" | "medium" | "high" | "extra_high";
+    focus?: string;
+  } = {},
 ) {
   if (!(await isOnline())) {
     throw new ApiError("Generating a program needs a connection", 0, null);
   }
   const result = await apiRequest<{ program: ProgramDetail; createdExerciseCount: number }>(
     "/programs/generate",
-    { body: input },
+    // The server calls a model here, so this outlives the default request deadline.
+    { body: input, timeoutMs: 180_000 },
   );
   await refreshLocal();
   const program = await getProgramByServerId(result.program.id);

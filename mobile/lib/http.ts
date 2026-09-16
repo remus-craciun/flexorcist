@@ -12,12 +12,16 @@ export class ApiError extends Error {
   }
 }
 
+/** An unreachable LAN address stalls the TCP connect for minutes, so every request needs a deadline. */
+const DEFAULT_TIMEOUT_MS = 15_000;
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
   auth?: boolean;
   apiUrl?: string | null;
   token?: string | null;
+  timeoutMs?: number;
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -41,15 +45,31 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     }
   }
 
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: options.method ?? (options.body !== undefined ? "POST" : "GET"),
       headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
     });
   } catch {
-    throw new ApiError("Network error", 0, null);
+    throw new ApiError(
+      timedOut
+        ? `${baseUrl} did not respond in time. Check the server is running and reachable from this network.`
+        : `Could not reach ${baseUrl}. Use http://IP:port on the same Wi‑Fi, or the https domain from Coolify.`,
+      0,
+      null,
+    );
+  } finally {
+    clearTimeout(timer);
   }
 
   const text = await response.text();

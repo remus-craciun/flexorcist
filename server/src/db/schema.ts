@@ -25,7 +25,6 @@ export const profiles = sqliteTable("profiles", {
     enum: ["beginner", "intermediate", "advanced"],
   }),
   goals: text("goals", { mode: "json" }).$type<string[]>().notNull().default([]),
-  daysPerWeek: integer("days_per_week"),
   limitations: text("limitations").notNull().default(""),
   updatedAt: text("updated_at")
     .notNull()

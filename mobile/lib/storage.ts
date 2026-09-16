@@ -5,6 +5,7 @@ const API_URL_KEY = "flexorcist.apiUrl";
 const TOKEN_KEY = "flexorcist.token";
 const USER_EMAIL_KEY = "flexorcist.userEmail";
 const PLACE_KEY = "flexorcist.place";
+const TRAINING_DAYS_KEY = "flexorcist.trainingDays";
 
 async function setItem(key: string, value: string) {
   if (Platform.OS === "web") {
@@ -33,8 +34,16 @@ export async function getApiUrl() {
   return getItem(API_URL_KEY);
 }
 
+export function normalizeApiUrl(url: string) {
+  let next = url.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(next)) {
+    next = `http://${next}`;
+  }
+  return next;
+}
+
 export async function setApiUrl(url: string) {
-  const normalized = url.trim().replace(/\/+$/, "");
+  const normalized = normalizeApiUrl(url);
   await setItem(API_URL_KEY, normalized);
   return normalized;
 }
@@ -72,4 +81,19 @@ export async function getPreferredPlace() {
 
 export async function setPreferredPlace(place: "home" | "park" | "gym") {
   await setItem(PLACE_KEY, place);
+}
+
+/** Weekdays picked for the last generated program: 1=Monday … 7=Sunday. */
+export async function getPreferredTrainingDays(): Promise<number[] | null> {
+  const value = await getItem(TRAINING_DAYS_KEY);
+  if (!value) return null;
+  const days = value
+    .split(",")
+    .map(Number)
+    .filter((day) => Number.isInteger(day) && day >= 1 && day <= 7);
+  return days.length > 0 ? [...new Set(days)].sort((a, b) => a - b) : null;
+}
+
+export async function setPreferredTrainingDays(days: number[]) {
+  await setItem(TRAINING_DAYS_KEY, days.join(","));
 }

@@ -14,6 +14,17 @@ export function weekdayName(dayIndex: number): string {
   return WEEKDAYS[dayIndex - 1] ?? `Day ${dayIndex}`;
 }
 
+/** Chip options for picking training days. Values are dayIndex as strings. */
+export const WEEKDAY_OPTIONS = WEEKDAYS.map((weekday, index) => ({
+  value: String(index + 1),
+  label: weekday.slice(0, 3),
+}));
+
+/** Sorted, de-duplicated dayIndex numbers from chip values. */
+export function toDayIndexes(values: string[]): number[] {
+  return [...new Set(values.map(Number))].sort((a, b) => a - b);
+}
+
 export type TrainingDay = {
   key: string;
   week: number;
