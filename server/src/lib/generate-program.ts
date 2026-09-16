@@ -40,8 +40,8 @@ const generatedExerciseSchema = z.object({
 });
 
 const generatedWorkoutSchema = z.object({
-  week: z.number().int().min(1).max(4),
-  dayIndex: z.number().int().min(1).max(7),
+  week: z.coerce.number().int().min(1).max(4),
+  dayIndex: z.coerce.number().int().min(1).max(7),
   label: z.string().max(80).nullable().optional(),
   location: z.enum(LOCATIONS),
   totalSets: z.number().int().min(6).max(25).optional(),
@@ -86,55 +86,88 @@ export class GenerateError extends Error {
   }
 }
 
-const responseJsonSchema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    weeks: { type: Type.INTEGER },
-    notes: { type: Type.STRING },
-    workouts: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          week: { type: Type.INTEGER },
-          dayIndex: { type: Type.INTEGER },
-          label: { type: Type.STRING },
-          location: { type: Type.STRING, enum: [...LOCATIONS] },
-          totalSets: { type: Type.INTEGER },
-          exercises: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                muscles: { type: Type.ARRAY, items: { type: Type.STRING } },
-                equipment: { type: Type.ARRAY, items: { type: Type.STRING } },
-                description: { type: Type.STRING },
-                sets: { type: Type.INTEGER },
-                reps: { type: Type.STRING },
-                restSeconds: { type: Type.INTEGER },
-                notes: { type: Type.STRING },
+function weekdayLabel(day: number) {
+  return `${WEEKDAYS[day - 1]} (dayIndex ${day})`;
+}
+
+function expectedWorkoutCount(weeks: number, days: number[]) {
+  return weeks * days.length * LOCATIONS.length;
+}
+
+function uniqueDayIndexes(draft: GeneratedProgram) {
+  return [...new Set(draft.workouts.map((workout) => workout.dayIndex))].sort((a, b) => a - b);
+}
+
+function missingTrainingDays(draft: GeneratedProgram, days: number[]) {
+  const present = new Set(uniqueDayIndexes(draft));
+  return days.filter((day) => !present.has(day));
+}
+
+/**
+ * Pin the shape to this request. A generic schema (any dayIndex, any length)
+ * is how the model "succeeds" at a 3-day PPL when the athlete asked for four
+ * days — it simply never emits Friday.
+ */
+function buildResponseJsonSchema(weeks: number, days: number[]) {
+  const workoutCount = expectedWorkoutCount(weeks, days);
+  const dayList = days.map(weekdayLabel).join(", ");
+  return {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      weeks: { type: Type.INTEGER, minimum: weeks, maximum: weeks },
+      notes: { type: Type.STRING },
+      workouts: {
+        type: Type.ARRAY,
+        minItems: workoutCount,
+        maxItems: workoutCount,
+        description: `Exactly ${workoutCount} workouts (${weeks} week(s) × ${days.length} day(s) × 3 locations). dayIndex must be one of: ${dayList}.`,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            week: { type: Type.INTEGER, minimum: 1, maximum: weeks },
+            dayIndex: {
+              type: Type.INTEGER,
+              enum: days.map(String),
+              description: `Weekday number, not a session counter. Allowed: ${dayList}.`,
+            },
+            label: { type: Type.STRING },
+            location: { type: Type.STRING, enum: [...LOCATIONS] },
+            totalSets: { type: Type.INTEGER },
+            exercises: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  muscles: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  equipment: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  description: { type: Type.STRING },
+                  sets: { type: Type.INTEGER },
+                  reps: { type: Type.STRING },
+                  restSeconds: { type: Type.INTEGER },
+                  notes: { type: Type.STRING },
+                },
+                required: [
+                  "name",
+                  "muscles",
+                  "equipment",
+                  "description",
+                  "sets",
+                  "reps",
+                  "restSeconds",
+                  "notes",
+                ],
               },
-              required: [
-                "name",
-                "muscles",
-                "equipment",
-                "description",
-                "sets",
-                "reps",
-                "restSeconds",
-                "notes",
-              ],
             },
           },
+          required: ["week", "dayIndex", "label", "location", "totalSets", "exercises"],
         },
-        required: ["week", "dayIndex", "label", "location", "totalSets", "exercises"],
       },
     },
-  },
-  required: ["title", "weeks", "notes", "workouts"],
-};
+    required: ["title", "weeks", "notes", "workouts"],
+  };
+}
 
 function normalizeName(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -182,7 +215,15 @@ function buildPrompt(
   const goals =
     profile.goals.length > 0 ? profile.goals.join(", ").replaceAll("_", " ") : "general fitness";
   const focus = options.focus?.trim();
-  const weekdaySpan = days.map((day) => `${WEEKDAYS[day - 1]} (dayIndex ${day})`).join(", ");
+  const weekdaySpan = days.map(weekdayLabel).join(", ");
+  const restDays = [1, 2, 3, 4, 5, 6, 7].filter((day) => !days.includes(day));
+  const restSpan = restDays.length ? restDays.map(weekdayLabel).join(", ") : "none";
+  const workoutCount = expectedWorkoutCount(weeks, days);
+  const slotLines = Array.from({ length: weeks }, (_, index) => {
+    const week = index + 1;
+    const dayBits = days.map((day) => `${day} (${WEEKDAYS[day - 1]})`).join(", ");
+    return `- week ${week}: dayIndex ${dayBits} × home, park, gym`;
+  }).join("\n");
 
   return `You are Flexorcist's coach. Write a ${weeks}-week program this athlete can run as-is.
 
@@ -198,11 +239,16 @@ Use every known field. Do not invent injuries or history. Never prescribe a move
 ${focus ? `Athlete request (honor this unless it conflicts with limitations): ${focus}` : ""}
 
 CALENDAR
-- ${weeks} week(s), ${days.length} training day(s) per week: ${weekdaySpan}.
-- dayIndex is the weekday number: 1=Monday … 7=Sunday. Use exactly these dayIndex values every week: ${days.join(", ")}. Never emit a workout on any other day.
-- The athlete rests on the other days. Account for how the training days are spaced — back-to-back days should not hammer the same muscles, and a long gap is a chance for a harder session.
-- Each of those days has exactly three workouts: location "home", "park", and "gym".
+- Training days, every week: ${weekdaySpan}.
+- Rest days (zero workouts): ${restSpan}.
+- dayIndex is the weekday, not a session counter. 1=Monday … 7=Sunday. Session 4 is not dayIndex 4 unless Thursday was requested.
+- Emit every listed training day. Do not collapse this into a 3-day Push/Pull/Legs week unless exactly 3 days were requested. You need ${days.length} distinct dayIndex values per week. Omitting a listed day is invalid.
+- Do not fill rest days to make a consecutive Mon–N block. Do not drop a later weekday to save length; shorten descriptions instead.
+- Each training day has exactly three workouts: location "home", "park", and "gym".
+- workouts.length must be exactly ${workoutCount} (${weeks} × ${days.length} × 3). Required slots:
+${slotLines}
 - label is the session name only (Push, Pull, Legs, Upper, Lower, Full body). Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label.
+- The athlete rests on rest days. Account for how the training days are spaced — back-to-back days should not hammer the same muscles, and a long gap is a chance for a harder session.
 
 VOLUME
 The athlete chose ${volume.label}: ${volume.min}–${volume.max} working sets per workout.
@@ -227,19 +273,37 @@ PROGRAMMING
 
 EXERCISE LIBRARY
 Reuse these names exactly when the movement already exists. Invent a new name only when nothing matches. equipment[] must fit the location.
-${catalog.length === 0 ? "(empty — invent appropriate exercises)" : catalog.map(formatCatalogLine).join("\n")}`;
+${catalog.length === 0 ? "(empty — invent appropriate exercises)" : catalog.map(formatCatalogLine).join("\n")}
+
+OUTPUT CONTRACT
+- workouts.length = ${workoutCount}. Fewer objects means you dropped a day or a location.
+- Every week includes dayIndex ${days.join(", ")} and no others.
+- If you are short on space, shorten exercise descriptions. Never omit ${weekdaySpan}.`;
+}
+
+function buildRepairPrompt(
+  original: string,
+  present: number[],
+  days: number[],
+  weeks: number,
+) {
+  const omitted = days.filter((day) => !present.includes(day)).map(weekdayLabel).join(", ");
+  return `${original}
+
+PREVIOUS ATTEMPT REJECTED
+You emitted dayIndex ${present.join(", ") || "(none)"} and omitted ${omitted}.
+A ${present.length}-day split is invalid when ${days.length} days were requested.
+Rewrite the full program. workouts.length must be exactly ${expectedWorkoutCount(weeks, days)}. Every week must include dayIndex ${days.join(", ")}.`;
 }
 
 /**
- * Models reliably produce the right *number* of training days but sometimes
- * number them 1..N instead of on the weekdays we asked for. When the shape
- * matches, slide the draft onto the requested weekdays rather than failing the
- * whole generation — the split order is what matters, and it is preserved.
+ * Models often number sessions 1..N instead of using weekday dayIndex values.
+ * When the count matches, slide the draft onto the requested weekdays — the
+ * split order is what matters. A short count (PPL when four days were asked)
+ * is left untouched so the caller can retry.
  */
 function remapToRequestedDays(draft: GeneratedProgram, days: number[]): GeneratedProgram {
-  const present = [...new Set(draft.workouts.map((workout) => workout.dayIndex))].sort(
-    (a, b) => a - b,
-  );
+  const present = uniqueDayIndexes(draft);
   const wanted = [...days].sort((a, b) => a - b);
   if (present.length !== wanted.length) return draft;
   if (present.every((day, index) => day === wanted[index])) return draft;
@@ -276,7 +340,7 @@ function completeDays(draft: GeneratedProgram, weeks: number, days: number[]): G
         const existing = bySlot.get(`${week}-${dayIndex}-${location}`);
         if (!existing || existing.exercises.length < 3) {
           throw new GenerateError(
-            `Generated program is missing a complete ${location} workout for week ${week} day ${dayIndex}`,
+            `Generated program is missing a complete ${location} workout for week ${week} ${weekdayLabel(dayIndex)}`,
             502,
           );
         }
@@ -300,6 +364,7 @@ function completeDays(draft: GeneratedProgram, weeks: number, days: number[]): G
 async function requestDraft(
   env: Env,
   prompt: string,
+  schema: ReturnType<typeof buildResponseJsonSchema>,
 ): Promise<GeneratedProgram> {
   const started = performance.now();
   log.info("gemini.request.started", { model: env.GEMINI_MODEL, promptChars: prompt.length });
@@ -310,7 +375,8 @@ async function requestDraft(
     contents: prompt,
     config: {
       responseMimeType: "application/json",
-      responseJsonSchema,
+      responseJsonSchema: schema,
+      maxOutputTokens: 65536,
     },
   });
 
@@ -341,6 +407,7 @@ async function requestDraft(
     model: env.GEMINI_MODEL,
     ms: Math.round(performance.now() - started),
     workouts: result.data.workouts.length,
+    dayIndexes: uniqueDayIndexes(result.data),
   });
   return result.data;
 }
@@ -363,10 +430,24 @@ export async function generateAndPersistProgram(
   const days = resolveTrainingDays(options.days);
   const volume = options.volume ?? "medium";
   const prompt = buildPrompt(profile, catalog, { ...options, weeks, days, volume });
+  const schema = buildResponseJsonSchema(weeks, days);
 
   let draft: GeneratedProgram;
   try {
-    draft = await requestDraft(env, prompt);
+    draft = remapToRequestedDays(await requestDraft(env, prompt, schema), days);
+    const omitted = missingTrainingDays(draft, days);
+    if (omitted.length) {
+      log.warn("program.generate.incomplete_days", {
+        userId,
+        present: uniqueDayIndexes(draft),
+        wanted: days,
+        omitted,
+      });
+      draft = remapToRequestedDays(
+        await requestDraft(env, buildRepairPrompt(prompt, uniqueDayIndexes(draft), days, weeks), schema),
+        days,
+      );
+    }
   } catch (err) {
     if (err instanceof GenerateError) throw err;
     log.error("gemini.request.failed", {
@@ -379,7 +460,7 @@ export async function generateAndPersistProgram(
     );
   }
 
-  const programDraft = completeDays(remapToRequestedDays({ ...draft, weeks }, days), weeks, days);
+  const programDraft = completeDays({ ...draft, weeks }, weeks, days);
   const createdExerciseIds: number[] = [];
 
   const programId = db.transaction((tx) => {
@@ -452,6 +533,7 @@ export async function generateAndPersistProgram(
     programId,
     createdExerciseCount: createdExerciseIds.length,
     workouts: programDraft.workouts.length,
+    days,
   });
 
   return { programId, createdExerciseCount: createdExerciseIds.length };

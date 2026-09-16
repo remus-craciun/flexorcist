@@ -141,6 +141,7 @@ export function programRoutes(db: Db, env: Env) {
     log.info("program.generate.started", {
       userId,
       weeks: body.data.weeks,
+      days: body.data.days,
       volume: body.data.volume,
     });
 
