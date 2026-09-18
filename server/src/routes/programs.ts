@@ -143,6 +143,7 @@ export function programRoutes(db: Db, env: Env) {
       weeks: body.data.weeks,
       days: body.data.days,
       volume: body.data.volume,
+      structure: body.data.structure,
     });
 
     try {

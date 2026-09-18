@@ -34,6 +34,11 @@ const VOLUME_OPTIONS = [
   { value: "extra_high", label: "Extra high  21–25" },
 ] as const;
 
+const STRUCTURE_OPTIONS = [
+  { value: "full_body", label: "Full body" },
+  { value: "split", label: "Split" },
+] as const;
+
 function profileLine(profile: Profile) {
   const bits = [
     profile.sex,
@@ -51,6 +56,8 @@ export default function GenerateProgramScreen() {
   const [days, setDays] = useState<string[]>(DEFAULT_DAYS);
   const [volume, setVolume] =
     useState<(typeof VOLUME_OPTIONS)[number]["value"]>("medium");
+  const [structure, setStructure] =
+    useState<(typeof STRUCTURE_OPTIONS)[number]["value"]>("full_body");
   const [focus, setFocus] = useState("");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -89,6 +96,7 @@ export default function GenerateProgramScreen() {
         weeks: Number(weeks),
         days: sortedDays,
         volume,
+        structure,
         focus: focus.trim() || undefined,
       });
       router.replace(`/programs/${program.id}`);
@@ -152,6 +160,17 @@ export default function GenerateProgramScreen() {
           options={[...VOLUME_OPTIONS]}
           value={volume}
           onChange={setVolume}
+        />
+        <OptionGroup
+          label="Workout structure"
+          hint={
+            structure === "split"
+              ? "Each training day focuses on part of the body (e.g. upper / lower)."
+              : "Every training day trains the whole body."
+          }
+          options={[...STRUCTURE_OPTIONS]}
+          value={structure}
+          onChange={setStructure}
         />
         <Field
           label="Focus (optional)"

@@ -49,8 +49,21 @@ function write(level: LogLevel, event: string, fields: LogFields = {}) {
   }
 }
 
+function dump(event: string, text: string, fields: LogFields = {}) {
+  const body = text.length > 0 ? text : "(empty)";
+  const lines = body.split(/\r?\n/);
+  write("info", `${event}.begin`, { ...fields, chars: body.length, lines: lines.length });
+  // One stdout line per content line so Docker/journald keep the dump instead of
+  // treating a multiline console.log as noise or truncating it.
+  for (let index = 0; index < lines.length; index++) {
+    console.log(`${timestamp()}  INFO   ${event}  ${index + 1}/${lines.length}  ${lines[index]}`);
+  }
+  write("info", `${event}.end`, { chars: body.length, lines: lines.length });
+}
+
 export const log = {
   info: (event: string, fields?: LogFields) => write("info", event, fields),
   warn: (event: string, fields?: LogFields) => write("warn", event, fields),
   error: (event: string, fields?: LogFields) => write("error", event, fields),
+  dump,
 };

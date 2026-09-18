@@ -133,6 +133,8 @@ export async function generateProgram(
     /** Weekdays to train on, as dayIndex values: 1=Monday … 7=Sunday. */
     days?: number[];
     volume?: "low" | "medium" | "high" | "extra_high";
+    /** Full-body sessions every day, or the body divided across the week. */
+    structure?: "full_body" | "split";
     focus?: string;
   } = {},
 ) {

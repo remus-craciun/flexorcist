@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "../db";
@@ -32,11 +32,11 @@ const generatedExerciseSchema = z.object({
   name: z.string().min(1).max(200),
   muscles: z.array(z.string().min(1).max(40)).max(8).default([]),
   equipment: z.array(z.string().min(1).max(40)).max(8).default([]),
-  description: z.string().max(800).default(""),
+  description: z.string().max(240).default(""),
   sets: z.number().int().min(1).max(10),
   reps: z.string().min(1).max(40),
   restSeconds: z.number().int().min(0).max(600),
-  notes: z.string().max(400).default(""),
+  notes: z.string().max(120).default(""),
 });
 
 const generatedWorkoutSchema = z.object({
@@ -51,7 +51,7 @@ const generatedWorkoutSchema = z.object({
 const generatedProgramSchema = z.object({
   title: z.string().min(1).max(200),
   weeks: z.number().int().min(1).max(4),
-  notes: z.string().max(2000).default(""),
+  notes: z.string().max(600).default(""),
   workouts: z.array(generatedWorkoutSchema).min(3).max(84),
 });
 
@@ -71,6 +71,8 @@ export const generateRequestSchema = z.object({
   /** Weekdays to train on, as dayIndex values: 1=Monday … 7=Sunday. */
   days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
   volume: z.enum(["low", "medium", "high", "extra_high"]).optional(),
+  /** Whether every training day trains the whole body, or the body is divided across the week. */
+  structure: z.enum(["full_body", "split"]).optional(),
   focus: z.string().max(500).optional(),
 });
 
@@ -104,49 +106,40 @@ function missingTrainingDays(draft: GeneratedProgram, days: number[]) {
 }
 
 /**
- * Pin the shape to this request. A generic schema (any dayIndex, any length)
- * is how the model "succeeds" at a 3-day PPL when the athlete asked for four
- * days — it simply never emits Friday.
+ * Shape only. Do not pin array lengths or integer enums here — Gemini
+ * compiles the schema into a decoder and rejects minItems=48 + nested
+ * exercise arrays as INVALID_ARGUMENT ("too many states").
  */
-function buildResponseJsonSchema(weeks: number, days: number[]) {
-  const workoutCount = expectedWorkoutCount(weeks, days);
-  const dayList = days.map(weekdayLabel).join(", ");
+function buildResponseJsonSchema() {
   return {
-    type: Type.OBJECT,
+    type: "object",
     properties: {
-      title: { type: Type.STRING },
-      weeks: { type: Type.INTEGER, minimum: weeks, maximum: weeks },
-      notes: { type: Type.STRING },
+      title: { type: "string" },
+      weeks: { type: "integer" },
+      notes: { type: "string" },
       workouts: {
-        type: Type.ARRAY,
-        minItems: workoutCount,
-        maxItems: workoutCount,
-        description: `Exactly ${workoutCount} workouts (${weeks} week(s) × ${days.length} day(s) × 3 locations). dayIndex must be one of: ${dayList}.`,
+        type: "array",
         items: {
-          type: Type.OBJECT,
+          type: "object",
           properties: {
-            week: { type: Type.INTEGER, minimum: 1, maximum: weeks },
-            dayIndex: {
-              type: Type.INTEGER,
-              enum: days.map(String),
-              description: `Weekday number, not a session counter. Allowed: ${dayList}.`,
-            },
-            label: { type: Type.STRING },
-            location: { type: Type.STRING, enum: [...LOCATIONS] },
-            totalSets: { type: Type.INTEGER },
+            week: { type: "integer" },
+            dayIndex: { type: "integer" },
+            label: { type: "string" },
+            location: { type: "string", enum: [...LOCATIONS] },
+            totalSets: { type: "integer" },
             exercises: {
-              type: Type.ARRAY,
+              type: "array",
               items: {
-                type: Type.OBJECT,
+                type: "object",
                 properties: {
-                  name: { type: Type.STRING },
-                  muscles: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  equipment: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  description: { type: Type.STRING },
-                  sets: { type: Type.INTEGER },
-                  reps: { type: Type.STRING },
-                  restSeconds: { type: Type.INTEGER },
-                  notes: { type: Type.STRING },
+                  name: { type: "string" },
+                  muscles: { type: "array", items: { type: "string" } },
+                  equipment: { type: "array", items: { type: "string" } },
+                  description: { type: "string" },
+                  sets: { type: "integer" },
+                  reps: { type: "string" },
+                  restSeconds: { type: "integer" },
+                  notes: { type: "string" },
                 },
                 required: [
                   "name",
@@ -215,6 +208,7 @@ function buildPrompt(
   const goals =
     profile.goals.length > 0 ? profile.goals.join(", ").replaceAll("_", " ") : "general fitness";
   const focus = options.focus?.trim();
+  const structure = options.structure ?? "full_body";
   const weekdaySpan = days.map(weekdayLabel).join(", ");
   const restDays = [1, 2, 3, 4, 5, 6, 7].filter((day) => !days.includes(day));
   const restSpan = restDays.length ? restDays.map(weekdayLabel).join(", ") : "none";
@@ -224,6 +218,20 @@ function buildPrompt(
     const dayBits = days.map((day) => `${day} (${WEEKDAYS[day - 1]})`).join(", ");
     return `- week ${week}: dayIndex ${dayBits} × home, park, gym`;
   }).join("\n");
+
+  const structureBlock =
+    structure === "split"
+      ? `WORKOUT STRUCTURE: SPLIT
+The athlete wants a split — the body is divided across the ${days.length} training days.
+- Choose the division that fits ${days.length} days and their spacing (${weekdaySpan}). Every major muscle group is trained at least once per week; with 4+ days, the big ones twice.
+- Each training day has a clear focus and a label that names it (e.g. "Upper", "Lower", "Push", "Pull", "Legs").
+- The split must use exactly ${days.length} days. If a familiar template has fewer or more days than that, adapt it — never drop or add a training day to fit the template.
+- Back-to-back days train different muscle groups.`
+      : `WORKOUT STRUCTURE: FULL BODY
+The athlete wants full-body sessions — every training day trains the whole body.
+- Each workout includes a squat or hinge, a push, a pull, and core. Compounds first, then accessories.
+- Vary the movements between training days so the same primary muscles are not loaded heavy two days in a row.
+- Labels describe the session's emphasis (e.g. "Full Body A", "Full Body — Squat Focus"), not a body part.`;
 
   return `You are Flexorcist's coach. Write a ${weeks}-week program this athlete can run as-is.
 
@@ -239,7 +247,7 @@ Use every known field. Do not invent injuries or history. Never prescribe a move
 ${focus ? `Athlete request (honor this unless it conflicts with limitations): ${focus}` : ""}
 
 CALENDAR (FIXED — DO NOT CHANGE)
-The athlete already chose the training week. You do not invent a split. You do not pick training days. You do not drop, merge, or replace days with Push/Pull/Legs, Upper/Lower, or any other template.
+The athlete already chose the training week. You do not pick training days. You do not drop, merge, or replace days to fit a template.
 - Training days, every week: ${weekdaySpan}. Each of these days must have a complete workout.
 - Rest days (zero workouts): ${restSpan}. Leave them empty. Do not move a workout onto a rest day.
 - dayIndex is the weekday, not a session counter. 1=Monday … 7=Sunday. Session 4 is not dayIndex 4 unless Thursday was requested.
@@ -249,12 +257,13 @@ The athlete already chose the training week. You do not invent a split. You do n
 - workouts.length must be exactly ${workoutCount} (${weeks} × ${days.length} × 3). Required slots:
 ${slotLines}
 
+${structureBlock}
+
 EACH TRAINING DAY
 Write one complete standalone workout for every listed training day — the athlete shows up that day and has a full session ready.
-- Cover squat, hinge, push, pull, and core across the week. Prefer a balanced session each training day (compounds first, then accessories) rather than a body-part split.
-- If two training days are back to back, change the hard compounds so the same primary muscles are not loaded heavy two days in a row. A long gap is a chance for the hardest session.
+- Cover squat, hinge, push, pull, and core across the week. A long gap before a day is a chance for the hardest session.
 - The same weekday keeps the same session across all ${weeks} week(s) so the athlete can track progress.
-- label: a short name (1–3 words) for that day's session. Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label. Do not use a split name as a reason to skip a day.
+- label: a short name (1–3 words) for that day's session. Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label. A label never justifies skipping a day.
 
 VOLUME
 The athlete chose ${volume.label}: ${volume.min}–${volume.max} working sets per workout.
@@ -272,10 +281,11 @@ PROGRAMMING
 - Scale difficulty to experience. Prefer compounds first, then accessories. Do not repeat the same movement twice in one workout.
 - If goals include strength or hypertrophy, progress across weeks (reps, tempo, or a harder variation) while staying inside the volume band.
 - title: specific to this athlete, not a generic "Workout Plan".
-- program notes: 2–4 sentences on how to run these ${days.length} training days, how to progress, and how to pick a location each day. Do not describe a split you invented.
-- exercise description: 1–2 sentences of execution cues.
-- exercise notes: a short coach cue, or "".
+- program notes: 1–2 short sentences on how to progress and how to pick home/park/gym.
+- exercise description: one short execution cue (about 12–20 words). Setup, breathing, and coaching essays are invalid.
+- exercise notes: a few words, or "".
 - reps: a number or a tight range ("5", "8-12").
+- Write dense. Prefer a missing adjective over a second sentence.
 
 EXERCISE LIBRARY
 Reuse these names exactly when the movement already exists. Invent a new name only when nothing matches. equipment[] must fit the location.
@@ -284,8 +294,9 @@ ${catalog.length === 0 ? "(empty — invent appropriate exercises)" : catalog.ma
 OUTPUT CONTRACT
 - workouts.length = ${workoutCount}. Fewer objects means you dropped a day or a location.
 - Every week includes a complete workout for each of dayIndex ${days.join(", ")} and no others.
-- Do not output a 3-day (or N-day) split of your own choosing. The training days are ${weekdaySpan}.
-- If you are short on space, shorten exercise descriptions. Never omit ${weekdaySpan}.`;
+- Do not change the number of training days to fit a template. The training days are ${weekdaySpan}.
+- If you are short on space, shorten exercise descriptions further. Never omit ${weekdaySpan}.
+- Keep every description and note brief. Long prose is a failed response.`;
 }
 
 function buildRepairPrompt(
@@ -299,7 +310,7 @@ function buildRepairPrompt(
 
 PREVIOUS ATTEMPT REJECTED
 You emitted dayIndex ${present.join(", ") || "(none)"} and omitted ${omitted}.
-You invented a ${present.length}-day split. That is invalid. The athlete selected ${days.length} training days and you must write a complete workout for each of them.
+A ${present.length}-day week is invalid. The athlete selected ${days.length} training days and you must write a complete workout for each of them.
 Rewrite the full program. workouts.length must be exactly ${expectedWorkoutCount(weeks, days)}. Every week must include a workout for dayIndex ${days.join(", ")}.`;
 }
 
@@ -369,12 +380,12 @@ function completeDays(draft: GeneratedProgram, weeks: number, days: number[]): G
 }
 
 function logAiResponseDebug(label: string, text: string | undefined, draft?: GeneratedProgram) {
-  console.log(`\n======== AI RESPONSE (${label}) ========\n`);
   if (draft) {
     const dayLabels = [...new Map(draft.workouts.map((w) => [w.dayIndex, w.label ?? ""])).entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([day, label]) => `${day}:${label || "(none)"}`);
-    console.log(
+    log.dump(
+      `gemini.response.${label}`,
       JSON.stringify(
         {
           title: draft.title,
@@ -396,33 +407,73 @@ function logAiResponseDebug(label: string, text: string | undefined, draft?: Gen
         2,
       ),
     );
-  } else if (text) {
-    console.log(text);
-  } else {
-    console.log("(empty response.text)");
+    return;
   }
-  console.log(`\n======== END AI RESPONSE (${label}) ========\n`);
+  log.dump(`gemini.response.${label}`, text ?? "");
+}
+
+function geminiErrorPayload(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const extra = err as Error & { status?: unknown; code?: unknown; error?: unknown };
+  try {
+    return JSON.stringify({
+      name: extra.name,
+      message: extra.message,
+      status: extra.status,
+      code: extra.code,
+      error: extra.error,
+      cause: extra.cause instanceof Error ? extra.cause.message : extra.cause,
+    });
+  } catch {
+    return extra.message;
+  }
+}
+
+function isGeminiInvalidArgument(err: unknown): boolean {
+  const payload = geminiErrorPayload(err);
+  return payload.includes("INVALID_ARGUMENT") || payload.includes('"code":400');
 }
 
 async function requestDraft(
   env: Env,
   prompt: string,
-  schema: ReturnType<typeof buildResponseJsonSchema>,
+  schema: ReturnType<typeof buildResponseJsonSchema> | undefined,
   debugLabel = "draft",
 ): Promise<GeneratedProgram> {
   const started = performance.now();
-  log.info("gemini.request.started", { model: env.GEMINI_MODEL, promptChars: prompt.length, debugLabel });
+  log.info("gemini.request.started", {
+    model: env.GEMINI_MODEL,
+    promptChars: prompt.length,
+    debugLabel,
+    structuredOutput: Boolean(schema),
+  });
 
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-  const response = await ai.models.generateContent({
-    model: env.GEMINI_MODEL,
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseJsonSchema: schema,
-      maxOutputTokens: 65536,
-    },
-  });
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: env.GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        ...(schema ? { responseJsonSchema: schema } : {}),
+        maxOutputTokens: 65536,
+      },
+    });
+  } catch (err) {
+    log.error("gemini.request.rejected", {
+      model: env.GEMINI_MODEL,
+      debugLabel,
+      ms: Math.round(performance.now() - started),
+      structuredOutput: Boolean(schema),
+      error: geminiErrorPayload(err),
+    });
+    if (schema && isGeminiInvalidArgument(err)) {
+      log.warn("gemini.request.retry_without_schema", { model: env.GEMINI_MODEL, debugLabel });
+      return requestDraft(env, prompt, undefined, `${debugLabel}-noschema`);
+    }
+    throw err;
+  }
 
   const text = response.text;
   logAiResponseDebug(debugLabel, text);
@@ -477,19 +528,16 @@ export async function generateAndPersistProgram(
   const weeks = options.weeks ?? 4;
   const days = resolveTrainingDays(options.days);
   const volume = options.volume ?? "medium";
-  const prompt = buildPrompt(profile, catalog, { ...options, weeks, days, volume });
-  const schema = buildResponseJsonSchema(weeks, days);
+  const structure = options.structure ?? "full_body";
+  const prompt = buildPrompt(profile, catalog, { ...options, weeks, days, volume, structure });
+  const schema = buildResponseJsonSchema();
 
-  // TEMP debug: print the full prompt before calling Gemini.
-  console.log("\n======== AI PROMPT (debug) ========\n");
-  console.log(prompt);
-  console.log("\n======== END AI PROMPT ========\n");
-  log.info("program.generate.prompt_debug", {
+  log.dump("gemini.prompt", prompt, {
     userId,
     weeks,
     days,
     volume,
-    promptChars: prompt.length,
+    structure,
     schemaWorkoutCount: expectedWorkoutCount(weeks, days),
   });
 
@@ -505,9 +553,7 @@ export async function generateAndPersistProgram(
         omitted,
       });
       const repairPrompt = buildRepairPrompt(prompt, uniqueDayIndexes(draft), days, weeks);
-      console.log("\n======== AI REPAIR PROMPT (debug) ========\n");
-      console.log(repairPrompt);
-      console.log("\n======== END AI REPAIR PROMPT ========\n");
+      log.dump("gemini.prompt.repair", repairPrompt, { userId, weeks, days });
       draft = remapToRequestedDays(
         await requestDraft(env, repairPrompt, schema, "repair"),
         days,
