@@ -7,6 +7,7 @@ import { PlayButton } from "@/components/play-button";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Chip } from "@/components/ui/chip";
+import { Dropdown } from "@/components/ui/dropdown";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 import { AppText } from "@/components/ui/text";
@@ -117,6 +118,11 @@ export default function HomeScreen() {
   const trainedElsewhere = todayLogs.filter((session) => session.location !== place);
   const cheer = completed ? cheerFor(completed) : null;
   const followable = programs.filter((item) => item.status !== "archived");
+  const programOptions = followable.map((item) => ({
+    value: item.id,
+    label: item.title,
+    meta: `${item.weeks} week${item.weeks === 1 ? "" : "s"}`,
+  }));
 
   function onSelectPlace(next: Location) {
     setPlace(next);
@@ -191,38 +197,15 @@ export default function HomeScreen() {
         </View>
 
         {followable.length > 1 ? (
-          <View className="gap-2">
-            <AppText variant="label">Which program are you following?</AppText>
-            <View className="gap-2">
-              {followable.map((item) => {
-                const selected = program?.id === item.id;
-                return (
-                  <Pressable
-                    key={item.id}
-                    onPress={() => onFollow(item.id)}
-                    disabled={switching}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected, disabled: switching }}
-                    className={`rounded-card border px-4 py-3 ${
-                      selected ? "border-accent bg-accent-soft" : "border-line bg-surface"
-                    } ${switching ? "opacity-70" : "active:opacity-80"}`}
-                  >
-                    <View className="flex-row items-baseline justify-between gap-3">
-                      <AppText
-                        variant="bodyMedium"
-                        className={`flex-1 ${selected ? "text-accent" : "text-ink"}`}
-                      >
-                        {item.title}
-                      </AppText>
-                      <AppText variant="caption" tone={selected ? "accent" : "muted"}>
-                        {item.weeks} week{item.weeks === 1 ? "" : "s"}
-                      </AppText>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
+          <Dropdown
+            label="Which program are you following?"
+            title="Programs"
+            options={programOptions}
+            value={program?.id ?? null}
+            onChange={onFollow}
+            disabled={switching}
+            placeholder={switching ? "Switching…" : "Pick a program"}
+          />
         ) : null}
 
         {trainedElsewhere.length > 0 && !completed ? (
@@ -237,7 +220,7 @@ export default function HomeScreen() {
         {completed && cheer ? (
           <View className="gap-3">
             <Card className="gap-3 border-done bg-done-soft">
-              <AppText className="text-[34px] leading-[40px]">{cheer.emoji}</AppText>
+              <AppText variant="emoji">{cheer.emoji}</AppText>
               <Chip label="Done today" tone="done" />
               <AppText variant="title" tone="done">
                 {cheer.title}

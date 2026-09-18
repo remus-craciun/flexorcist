@@ -62,10 +62,7 @@ export default function SessionRestScreen() {
         </View>
 
         <View className="items-center gap-3">
-          <AppText
-            variant="display"
-            className="font-display-bold text-[96px] leading-[100px] text-accent"
-          >
+          <AppText variant="numeralHero" tone="accent">
             {formatClock(remaining)}
           </AppText>
         </View>

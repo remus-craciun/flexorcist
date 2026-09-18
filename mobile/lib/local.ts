@@ -661,6 +661,15 @@ export async function removeWorkoutExerciseLocal(
   return true;
 }
 
+/** True once any snapshot data has landed on this device. */
+export async function hasLocalSnapshot() {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ n: number }>(
+    "SELECT EXISTS (SELECT 1 FROM programs UNION ALL SELECT 1 FROM exercises) AS n",
+  );
+  return (row?.n ?? 0) > 0;
+}
+
 export async function getByServerId<T extends { server_id: number | null }>(
   table: SyncTable,
   serverId: number,

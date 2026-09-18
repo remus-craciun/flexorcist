@@ -65,10 +65,7 @@ export default function SessionExerciseScreen() {
           </View>
 
           <View className="items-center gap-2 py-8">
-            <AppText
-              variant="display"
-              className="text-center font-display-bold text-[84px] leading-[88px]"
-            >
+            <AppText variant="numeralLarge" className="text-center">
               {current.reps}
             </AppText>
             <AppText variant="heading" tone="muted">

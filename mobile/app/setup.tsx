@@ -48,6 +48,9 @@ export default function SetupScreen() {
           onSubmitEditing={onConnect}
           error={error}
         />
+        <AppText variant="caption" tone="faint">
+          Include the scheme and port. LAN IPs need http://, Coolify domains use https://.
+        </AppText>
         <Button title="Connect" onPress={onConnect} loading={loading} disabled={!url.trim()} />
       </View>
     </KeyboardSafeScreen>

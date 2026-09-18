@@ -40,11 +40,6 @@ const GOAL_OPTIONS: { value: Goal; label: string }[] = [
   { value: "mobility", label: "Mobility" },
 ];
 
-const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7].map((n) => ({
-  value: String(n) as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`,
-  label: String(n),
-}));
-
 const emptyForm: ProfileInput = {
   sex: null,
   age: null,
@@ -52,7 +47,6 @@ const emptyForm: ProfileInput = {
   weightKg: null,
   experience: null,
   goals: [],
-  daysPerWeek: null,
   limitations: "",
 };
 
@@ -64,7 +58,6 @@ function profileToForm(profile: Profile): ProfileInput {
     weightKg: profile.weightKg,
     experience: profile.experience,
     goals: profile.goals,
-    daysPerWeek: profile.daysPerWeek,
     limitations: profile.limitations ?? "",
   };
 }
@@ -223,15 +216,6 @@ export default function ProfileScreen() {
           options={GOAL_OPTIONS}
           value={form.goals}
           onChange={(goals) => setForm((prev) => ({ ...prev, goals }))}
-        />
-
-        <OptionGroup
-          label="Training days per week"
-          options={DAY_OPTIONS}
-          value={form.daysPerWeek != null ? (String(form.daysPerWeek) as `${1 | 2 | 3 | 4 | 5 | 6 | 7}`) : null}
-          onChange={(days) =>
-            setForm((prev) => ({ ...prev, daysPerWeek: Number(days) }))
-          }
         />
 
         <Field
