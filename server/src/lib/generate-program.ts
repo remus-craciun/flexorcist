@@ -242,13 +242,18 @@ CALENDAR
 - Training days, every week: ${weekdaySpan}.
 - Rest days (zero workouts): ${restSpan}.
 - dayIndex is the weekday, not a session counter. 1=Monday … 7=Sunday. Session 4 is not dayIndex 4 unless Thursday was requested.
-- Emit every listed training day. Do not collapse this into a 3-day Push/Pull/Legs week unless exactly 3 days were requested. You need ${days.length} distinct dayIndex values per week. Omitting a listed day is invalid.
+- Emit every listed training day. Do not collapse the week into fewer days than requested. You need ${days.length} distinct dayIndex values per week. Omitting a listed day is invalid.
 - Do not fill rest days to make a consecutive Mon–N block. Do not drop a later weekday to save length; shorten descriptions instead.
 - Each training day has exactly three workouts: location "home", "park", and "gym".
 - workouts.length must be exactly ${workoutCount} (${weeks} × ${days.length} × 3). Required slots:
 ${slotLines}
-- label is the session name only (Push, Pull, Legs, Upper, Lower, Full body). Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label.
-- The athlete rests on rest days. Account for how the training days are spaced — back-to-back days should not hammer the same muscles, and a long gap is a chance for a harder session.
+
+WEEK STRUCTURE
+Design the split yourself. Derive it from this athlete's goals, experience, limitations, the number of training days, and how those days are spaced. Do not reach for a template because it is familiar — choose the structure that best serves this athlete on these exact days.
+- Every major movement pattern (squat, hinge, horizontal push, vertical push, horizontal pull, vertical pull, core/carry) is trained at least once per week; with ${days.length} days, distribute them so the weekly balance matches the goals.
+- Back-to-back training days must not load the same primary muscles hard two days in a row. A long gap before a day is a chance for the most demanding session.
+- Sessions on the same weekday carry the same role across all ${weeks} week(s) so the athlete can track progress.
+- label: a short name (1–3 words) describing what that session trains. Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label.
 
 VOLUME
 The athlete chose ${volume.label}: ${volume.min}–${volume.max} working sets per workout.
@@ -266,7 +271,7 @@ PROGRAMMING
 - Scale difficulty to experience. Prefer compounds first, then accessories. Do not repeat the same movement twice in one workout.
 - If goals include strength or hypertrophy, progress across weeks (reps, tempo, or a harder variation) while staying inside the volume band.
 - title: specific to this athlete, not a generic "Workout Plan".
-- program notes: 2–4 sentences on the split, how to progress, and how to pick a location each day.
+- program notes: 2–4 sentences on why the week is structured this way for this athlete, how to progress, and how to pick a location each day.
 - exercise description: 1–2 sentences of execution cues.
 - exercise notes: a short coach cue, or "".
 - reps: a number or a tight range ("5", "8-12").
@@ -292,7 +297,7 @@ function buildRepairPrompt(
 
 PREVIOUS ATTEMPT REJECTED
 You emitted dayIndex ${present.join(", ") || "(none)"} and omitted ${omitted}.
-A ${present.length}-day split is invalid when ${days.length} days were requested.
+A ${present.length}-day week is invalid when ${days.length} days were requested.
 Rewrite the full program. workouts.length must be exactly ${expectedWorkoutCount(weeks, days)}. Every week must include dayIndex ${days.join(", ")}.`;
 }
 
