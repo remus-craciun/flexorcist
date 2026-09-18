@@ -238,22 +238,23 @@ ATHLETE
 Use every known field. Do not invent injuries or history. Never prescribe a movement that would aggravate the limitations.
 ${focus ? `Athlete request (honor this unless it conflicts with limitations): ${focus}` : ""}
 
-CALENDAR
-- Training days, every week: ${weekdaySpan}.
-- Rest days (zero workouts): ${restSpan}.
+CALENDAR (FIXED — DO NOT CHANGE)
+The athlete already chose the training week. You do not invent a split. You do not pick training days. You do not drop, merge, or replace days with Push/Pull/Legs, Upper/Lower, or any other template.
+- Training days, every week: ${weekdaySpan}. Each of these days must have a complete workout.
+- Rest days (zero workouts): ${restSpan}. Leave them empty. Do not move a workout onto a rest day.
 - dayIndex is the weekday, not a session counter. 1=Monday … 7=Sunday. Session 4 is not dayIndex 4 unless Thursday was requested.
-- Emit every listed training day. Do not collapse the week into fewer days than requested. You need ${days.length} distinct dayIndex values per week. Omitting a listed day is invalid.
+- Every week must contain all ${days.length} training days: ${days.join(", ")}. Omitting any listed day is invalid.
 - Do not fill rest days to make a consecutive Mon–N block. Do not drop a later weekday to save length; shorten descriptions instead.
 - Each training day has exactly three workouts: location "home", "park", and "gym".
 - workouts.length must be exactly ${workoutCount} (${weeks} × ${days.length} × 3). Required slots:
 ${slotLines}
 
-WEEK STRUCTURE
-Design the split yourself. Derive it from this athlete's goals, experience, limitations, the number of training days, and how those days are spaced. Do not reach for a template because it is familiar — choose the structure that best serves this athlete on these exact days.
-- Every major movement pattern (squat, hinge, horizontal push, vertical push, horizontal pull, vertical pull, core/carry) is trained at least once per week; with ${days.length} days, distribute them so the weekly balance matches the goals.
-- Back-to-back training days must not load the same primary muscles hard two days in a row. A long gap before a day is a chance for the most demanding session.
-- Sessions on the same weekday carry the same role across all ${weeks} week(s) so the athlete can track progress.
-- label: a short name (1–3 words) describing what that session trains. Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label.
+EACH TRAINING DAY
+Write one complete standalone workout for every listed training day — the athlete shows up that day and has a full session ready.
+- Cover squat, hinge, push, pull, and core across the week. Prefer a balanced session each training day (compounds first, then accessories) rather than a body-part split.
+- If two training days are back to back, change the hard compounds so the same primary muscles are not loaded heavy two days in a row. A long gap is a chance for the hardest session.
+- The same weekday keeps the same session across all ${weeks} week(s) so the athlete can track progress.
+- label: a short name (1–3 words) for that day's session. Same label for home, park, and gym on that day, and the same label on that weekday in later weeks. Never put a weekday or week number in the label. Do not use a split name as a reason to skip a day.
 
 VOLUME
 The athlete chose ${volume.label}: ${volume.min}–${volume.max} working sets per workout.
@@ -271,7 +272,7 @@ PROGRAMMING
 - Scale difficulty to experience. Prefer compounds first, then accessories. Do not repeat the same movement twice in one workout.
 - If goals include strength or hypertrophy, progress across weeks (reps, tempo, or a harder variation) while staying inside the volume band.
 - title: specific to this athlete, not a generic "Workout Plan".
-- program notes: 2–4 sentences on why the week is structured this way for this athlete, how to progress, and how to pick a location each day.
+- program notes: 2–4 sentences on how to run these ${days.length} training days, how to progress, and how to pick a location each day. Do not describe a split you invented.
 - exercise description: 1–2 sentences of execution cues.
 - exercise notes: a short coach cue, or "".
 - reps: a number or a tight range ("5", "8-12").
@@ -282,7 +283,8 @@ ${catalog.length === 0 ? "(empty — invent appropriate exercises)" : catalog.ma
 
 OUTPUT CONTRACT
 - workouts.length = ${workoutCount}. Fewer objects means you dropped a day or a location.
-- Every week includes dayIndex ${days.join(", ")} and no others.
+- Every week includes a complete workout for each of dayIndex ${days.join(", ")} and no others.
+- Do not output a 3-day (or N-day) split of your own choosing. The training days are ${weekdaySpan}.
 - If you are short on space, shorten exercise descriptions. Never omit ${weekdaySpan}.`;
 }
 
@@ -297,8 +299,8 @@ function buildRepairPrompt(
 
 PREVIOUS ATTEMPT REJECTED
 You emitted dayIndex ${present.join(", ") || "(none)"} and omitted ${omitted}.
-A ${present.length}-day week is invalid when ${days.length} days were requested.
-Rewrite the full program. workouts.length must be exactly ${expectedWorkoutCount(weeks, days)}. Every week must include dayIndex ${days.join(", ")}.`;
+You invented a ${present.length}-day split. That is invalid. The athlete selected ${days.length} training days and you must write a complete workout for each of them.
+Rewrite the full program. workouts.length must be exactly ${expectedWorkoutCount(weeks, days)}. Every week must include a workout for dayIndex ${days.join(", ")}.`;
 }
 
 /**
@@ -366,13 +368,50 @@ function completeDays(draft: GeneratedProgram, weeks: number, days: number[]): G
   return { ...draft, weeks, workouts };
 }
 
+function logAiResponseDebug(label: string, text: string | undefined, draft?: GeneratedProgram) {
+  console.log(`\n======== AI RESPONSE (${label}) ========\n`);
+  if (draft) {
+    const dayLabels = [...new Map(draft.workouts.map((w) => [w.dayIndex, w.label ?? ""])).entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([day, label]) => `${day}:${label || "(none)"}`);
+    console.log(
+      JSON.stringify(
+        {
+          title: draft.title,
+          weeks: draft.weeks,
+          notes: draft.notes,
+          workoutCount: draft.workouts.length,
+          dayIndexes: uniqueDayIndexes(draft),
+          labelsByDay: dayLabels,
+          slots: draft.workouts.map((w) => ({
+            week: w.week,
+            dayIndex: w.dayIndex,
+            location: w.location,
+            label: w.label ?? null,
+            exerciseCount: w.exercises.length,
+            totalSets: w.totalSets,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (text) {
+    console.log(text);
+  } else {
+    console.log("(empty response.text)");
+  }
+  console.log(`\n======== END AI RESPONSE (${label}) ========\n`);
+}
+
 async function requestDraft(
   env: Env,
   prompt: string,
   schema: ReturnType<typeof buildResponseJsonSchema>,
+  debugLabel = "draft",
 ): Promise<GeneratedProgram> {
   const started = performance.now();
-  log.info("gemini.request.started", { model: env.GEMINI_MODEL, promptChars: prompt.length });
+  log.info("gemini.request.started", { model: env.GEMINI_MODEL, promptChars: prompt.length, debugLabel });
 
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   const response = await ai.models.generateContent({
@@ -386,6 +425,8 @@ async function requestDraft(
   });
 
   const text = response.text;
+  logAiResponseDebug(debugLabel, text);
+
   if (!text) {
     log.error("gemini.request.empty", { model: env.GEMINI_MODEL, ms: Math.round(performance.now() - started) });
     throw new GenerateError("Gemini returned an empty response", 502);
@@ -404,10 +445,12 @@ async function requestDraft(
     log.error("gemini.request.invalid_schema", {
       model: env.GEMINI_MODEL,
       ms: Math.round(performance.now() - started),
+      issues: result.error.issues.slice(0, 12).map((issue) => issue.message),
     });
     throw new GenerateError("Gemini returned a program that failed validation", 502);
   }
 
+  logAiResponseDebug(`${debugLabel} parsed`, text, result.data);
   log.info("gemini.request.succeeded", {
     model: env.GEMINI_MODEL,
     ms: Math.round(performance.now() - started),
@@ -437,9 +480,22 @@ export async function generateAndPersistProgram(
   const prompt = buildPrompt(profile, catalog, { ...options, weeks, days, volume });
   const schema = buildResponseJsonSchema(weeks, days);
 
+  // TEMP debug: print the full prompt before calling Gemini.
+  console.log("\n======== AI PROMPT (debug) ========\n");
+  console.log(prompt);
+  console.log("\n======== END AI PROMPT ========\n");
+  log.info("program.generate.prompt_debug", {
+    userId,
+    weeks,
+    days,
+    volume,
+    promptChars: prompt.length,
+    schemaWorkoutCount: expectedWorkoutCount(weeks, days),
+  });
+
   let draft: GeneratedProgram;
   try {
-    draft = remapToRequestedDays(await requestDraft(env, prompt, schema), days);
+    draft = remapToRequestedDays(await requestDraft(env, prompt, schema, "draft"), days);
     const omitted = missingTrainingDays(draft, days);
     if (omitted.length) {
       log.warn("program.generate.incomplete_days", {
@@ -448,8 +504,12 @@ export async function generateAndPersistProgram(
         wanted: days,
         omitted,
       });
+      const repairPrompt = buildRepairPrompt(prompt, uniqueDayIndexes(draft), days, weeks);
+      console.log("\n======== AI REPAIR PROMPT (debug) ========\n");
+      console.log(repairPrompt);
+      console.log("\n======== END AI REPAIR PROMPT ========\n");
       draft = remapToRequestedDays(
-        await requestDraft(env, buildRepairPrompt(prompt, uniqueDayIndexes(draft), days, weeks), schema),
+        await requestDraft(env, repairPrompt, schema, "repair"),
         days,
       );
     }
